@@ -52,33 +52,124 @@ export class FacebookAutomation {
     try {
       console.log(`[FB] Logging in with account: ${credentials.username.substring(0, 3)}***`);
       
-      await this.page!.goto("https://www.facebook.com/", { 
+      // Try mobile version first - more stable selectors
+      await this.page!.goto("https://m.facebook.com/", { 
         waitUntil: "networkidle2",
         timeout: 60000 
       });
 
       await this.delay(3000);
 
-      const cookieButton = await this.page!.$('[data-cookiebanner="accept_button"]');
-      if (cookieButton) {
-        await cookieButton.click();
-        await this.delay(1000);
+      // Handle cookie banners with multiple selectors
+      const cookieSelectors = [
+        '[data-cookiebanner="accept_button"]',
+        'button[data-testid="cookie-policy-manage-dialog-accept-button"]',
+        'button[value="Accept All"]',
+        'button[title="Accept All"]',
+        '[aria-label="Accept All"]',
+        'button:has-text("Accept")',
+      ];
+      
+      for (const selector of cookieSelectors) {
+        try {
+          const cookieBtn = await this.page!.$(selector);
+          if (cookieBtn) {
+            await cookieBtn.click();
+            await this.delay(1000);
+            console.log(`[FB] Accepted cookies with: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
       }
 
-      const acceptAllButton = await this.page!.$('button[data-testid="cookie-policy-manage-dialog-accept-button"]');
-      if (acceptAllButton) {
-        await acceptAllButton.click();
-        await this.delay(1000);
+      // Find and fill email field
+      const emailSelectors = ['input[name="email"]', '#m_login_email', 'input[type="email"]', 'input[type="text"]'];
+      let emailFilled = false;
+      for (const selector of emailSelectors) {
+        try {
+          const emailInput = await this.page!.$(selector);
+          if (emailInput) {
+            await emailInput.click();
+            await this.delay(200);
+            await this.page!.keyboard.type(credentials.username, { delay: 100 });
+            emailFilled = true;
+            console.log(`[FB] Filled email with: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
       }
-
-      await this.page!.type('input[name="email"]', credentials.username, { delay: 150 });
+      
+      if (!emailFilled) {
+        console.log(`[FB] Could not find email input`);
+        return false;
+      }
+      
       await this.delay(500);
-      await this.page!.type('input[name="pass"]', credentials.password, { delay: 150 });
+
+      // Find and fill password field
+      const passSelectors = ['input[name="pass"]', '#m_login_password', 'input[type="password"]'];
+      let passFilled = false;
+      for (const selector of passSelectors) {
+        try {
+          const passInput = await this.page!.$(selector);
+          if (passInput) {
+            await passInput.click();
+            await this.delay(200);
+            await this.page!.keyboard.type(credentials.password, { delay: 100 });
+            passFilled = true;
+            console.log(`[FB] Filled password with: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!passFilled) {
+        console.log(`[FB] Could not find password input`);
+        return false;
+      }
+      
       await this.delay(1000);
 
-      await this.page!.click('button[name="login"]');
+      // Find and click login button with multiple selectors
+      const loginButtonSelectors = [
+        'button[name="login"]',
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button[value="Log In"]',
+        'input[name="login"]',
+        '[data-sigil="m_login_button"]',
+        'button:has-text("Log In")',
+        'button:has-text("تسجيل الدخول")',
+      ];
       
-      await this.delay(8000);
+      let loginClicked = false;
+      for (const selector of loginButtonSelectors) {
+        try {
+          const loginBtn = await this.page!.$(selector);
+          if (loginBtn) {
+            await loginBtn.click();
+            loginClicked = true;
+            console.log(`[FB] Clicked login with: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!loginClicked) {
+        // Try pressing Enter as fallback
+        await this.page!.keyboard.press('Enter');
+        console.log(`[FB] Pressed Enter to submit`);
+      }
+      
+      await this.delay(10000);
 
       const currentUrl = this.page!.url();
       console.log(`[FB] Current URL after login: ${currentUrl}`);
@@ -231,42 +322,117 @@ export class FacebookAutomation {
     try {
       console.log(`[FB] Adding comment to post: ${postUrl}`);
 
-      if (!this.page.url().includes(postUrl)) {
-        await this.page.goto(postUrl, { 
-          waitUntil: "networkidle2",
-          timeout: 30000 
-        });
-        await this.delay(3000);
-      }
+      // Refresh the page to get clean state
+      await this.page.goto(postUrl, { 
+        waitUntil: "networkidle2",
+        timeout: 60000 
+      });
+      await this.delay(5000);
 
+      // Scroll down to load comments section
+      await this.page.evaluate(() => {
+        window.scrollBy(0, 600);
+      });
+      await this.delay(2000);
+
+      // Extended list of comment box selectors for different Facebook versions
       const commentBoxSelectors = [
         'div[aria-label="Write a comment"]',
+        'div[aria-label="Write a comment..."]',
+        'div[aria-label="اكتب تعليقاً"]',
         'div[aria-label="اكتب تعليقاً..."]',
+        'div[aria-label="أضف تعليقًا"]',
+        'div[aria-label*="comment"]',
+        'div[aria-label*="تعليق"]',
         'div[contenteditable="true"][role="textbox"]',
         'textarea[name="comment_text"]',
+        '[data-testid="UFI2CommentTextarea/root"]',
+        'div[data-sigil="comment-input"]',
+        'form[data-sigil="commenting-form"] textarea',
       ];
 
       let commentBox = null;
       for (const selector of commentBoxSelectors) {
-        commentBox = await this.page.$(selector);
-        if (commentBox) {
-          console.log(`[FB] Found comment box with selector: ${selector}`);
-          break;
+        try {
+          commentBox = await this.page.$(selector);
+          if (commentBox) {
+            console.log(`[FB] Found comment box with selector: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+
+      // Try to find by looking for placeholder text
+      if (!commentBox) {
+        console.log(`[FB] Searching for comment input by text...`);
+        const allInputs = await this.page.$$('div[contenteditable="true"], textarea, input[type="text"]');
+        for (const input of allInputs) {
+          try {
+            const placeholder = await input.evaluate(e => 
+              e.getAttribute('placeholder') || 
+              e.getAttribute('aria-label') || 
+              e.getAttribute('aria-placeholder') || 
+              ''
+            );
+            if (placeholder.toLowerCase().includes('comment') || 
+                placeholder.includes('تعليق') ||
+                placeholder.includes('اكتب')) {
+              commentBox = input;
+              console.log(`[FB] Found comment input with placeholder: ${placeholder}`);
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+
+      // Try clicking on "Write a comment" section first
+      if (!commentBox) {
+        console.log(`[FB] Trying to click on comment section...`);
+        const commentSections = await this.page.$$('[role="button"]');
+        for (const section of commentSections) {
+          try {
+            const text = await section.evaluate(e => e.textContent || '');
+            if (text.includes('Write a comment') || text.includes('تعليق') || text.includes('اكتب')) {
+              await section.click();
+              await this.delay(1000);
+              // Now try to find the input again
+              commentBox = await this.page.$('div[contenteditable="true"][role="textbox"]');
+              if (commentBox) {
+                console.log(`[FB] Found comment box after clicking section`);
+                break;
+              }
+            }
+          } catch (e) {
+            continue;
+          }
         }
       }
 
       if (!commentBox) {
+        console.log(`[FB] Comment box not found after all attempts`);
+        // Log current page elements for debugging
+        const allAriaElements = await this.page.$$('[aria-label]');
+        console.log(`[FB] Found ${allAriaElements.length} aria-label elements`);
+        for (const el of allAriaElements.slice(0, 10)) {
+          const label = await el.evaluate(e => e.getAttribute('aria-label'));
+          console.log(`[FB] aria-label: "${label}"`);
+        }
         return { success: false, error: "Comment box not found" };
       }
 
       await commentBox.click();
       await this.delay(500);
 
-      await this.page.keyboard.type(commentText, { delay: 50 });
-      await this.delay(1000);
+      await this.page.keyboard.type(commentText, { delay: 80 });
+      await this.delay(1500);
 
+      // Try multiple ways to submit
       await this.page.keyboard.press("Enter");
-      await this.delay(2000);
+      await this.delay(3000);
 
       console.log(`[FB] Successfully added comment`);
       return { success: true };
