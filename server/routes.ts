@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertMerchantSchema, insertCampaignSchema } from "@shared/schema";
 import { z } from "zod";
+import { campaignWorker } from "./campaign-worker";
 
 declare module "express-session" {
   interface SessionData {
@@ -189,6 +190,36 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Delete campaign error:", error);
       res.status(500).json({ error: "حدث خطأ أثناء حذف الحملة" });
+    }
+  });
+
+  app.get("/api/worker/status", requireAuth, async (req, res) => {
+    try {
+      const status = campaignWorker.getStatus();
+      res.json(status);
+    } catch (error) {
+      console.error("Get worker status error:", error);
+      res.status(500).json({ error: "حدث خطأ أثناء جلب حالة العامل" });
+    }
+  });
+
+  app.post("/api/worker/start", requireAuth, async (req, res) => {
+    try {
+      campaignWorker.start();
+      res.json({ success: true, message: "تم بدء العامل" });
+    } catch (error) {
+      console.error("Start worker error:", error);
+      res.status(500).json({ error: "حدث خطأ أثناء بدء العامل" });
+    }
+  });
+
+  app.post("/api/worker/stop", requireAuth, async (req, res) => {
+    try {
+      await campaignWorker.stop();
+      res.json({ success: true, message: "تم إيقاف العامل" });
+    } catch (error) {
+      console.error("Stop worker error:", error);
+      res.status(500).json({ error: "حدث خطأ أثناء إيقاف العامل" });
     }
   });
 

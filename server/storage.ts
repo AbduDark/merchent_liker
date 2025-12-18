@@ -30,7 +30,7 @@ function encrypt(text: string): string {
   return iv.toString("hex") + ":" + encrypted;
 }
 
-function decrypt(encryptedText: string): string {
+export function decrypt(encryptedText: string): string {
   const algorithm = "aes-256-cbc";
   const key = crypto.scryptSync(ENCRYPTION_KEY, "salt", 32);
   const [ivHex, encrypted] = encryptedText.split(":");
@@ -51,12 +51,14 @@ export interface IStorage {
   getAccount(id: string): Promise<SocialAccount | undefined>;
   createAccount(merchantId: string, account: { username: string; password: string }): Promise<SocialAccount>;
   deleteAccount(id: string): Promise<void>;
+  updateAccountStatus(id: string, status: string): Promise<void>;
   
   getCampaignsByMerchant(merchantId: string): Promise<Campaign[]>;
   getCampaign(id: string): Promise<Campaign | undefined>;
   createCampaign(merchantId: string, campaign: InsertCampaign): Promise<Campaign>;
   updateCampaign(id: string, data: Partial<Campaign>): Promise<Campaign | undefined>;
   deleteCampaign(id: string): Promise<void>;
+  getActiveCampaigns(): Promise<Campaign[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -118,6 +120,10 @@ export class DatabaseStorage implements IStorage {
     await db.delete(socialAccounts).where(eq(socialAccounts.id, id));
   }
 
+  async updateAccountStatus(id: string, status: string): Promise<void> {
+    await db.update(socialAccounts).set({ status: status as any, lastUsed: new Date() }).where(eq(socialAccounts.id, id));
+  }
+
   async getCampaignsByMerchant(merchantId: string): Promise<Campaign[]> {
     return db.select().from(campaigns).where(eq(campaigns.merchantId, merchantId));
   }
@@ -149,6 +155,10 @@ export class DatabaseStorage implements IStorage {
 
   async deleteCampaign(id: string): Promise<void> {
     await db.delete(campaigns).where(eq(campaigns.id, id));
+  }
+
+  async getActiveCampaigns(): Promise<Campaign[]> {
+    return db.select().from(campaigns).where(eq(campaigns.status, "active"));
   }
 }
 
