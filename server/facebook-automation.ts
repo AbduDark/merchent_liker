@@ -54,10 +54,10 @@ export class FacebookAutomation {
       
       await this.page!.goto("https://www.facebook.com/", { 
         waitUntil: "networkidle2",
-        timeout: 30000 
+        timeout: 60000 
       });
 
-      await this.delay(2000);
+      await this.delay(3000);
 
       const cookieButton = await this.page!.$('[data-cookiebanner="accept_button"]');
       if (cookieButton) {
@@ -65,27 +65,52 @@ export class FacebookAutomation {
         await this.delay(1000);
       }
 
-      await this.page!.type('input[name="email"]', credentials.username, { delay: 100 });
-      await this.page!.type('input[name="pass"]', credentials.password, { delay: 100 });
+      const acceptAllButton = await this.page!.$('button[data-testid="cookie-policy-manage-dialog-accept-button"]');
+      if (acceptAllButton) {
+        await acceptAllButton.click();
+        await this.delay(1000);
+      }
 
-      await Promise.all([
-        this.page!.click('button[name="login"]'),
-        this.page!.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {}),
-      ]);
+      await this.page!.type('input[name="email"]', credentials.username, { delay: 150 });
+      await this.delay(500);
+      await this.page!.type('input[name="pass"]', credentials.password, { delay: 150 });
+      await this.delay(1000);
 
-      await this.delay(3000);
+      await this.page!.click('button[name="login"]');
+      
+      await this.delay(8000);
 
       const currentUrl = this.page!.url();
+      console.log(`[FB] Current URL after login: ${currentUrl}`);
       
-      if (currentUrl.includes("checkpoint") || currentUrl.includes("login")) {
-        console.log(`[FB] Login failed - checkpoint or still on login page`);
+      if (currentUrl.includes("checkpoint")) {
+        console.log(`[FB] Login failed - security checkpoint required`);
         this.isLoggedIn = false;
         return false;
       }
 
-      this.isLoggedIn = true;
-      console.log(`[FB] Login successful`);
-      return true;
+      if (currentUrl.includes("two_step_verification")) {
+        console.log(`[FB] Login failed - 2FA required`);
+        this.isLoggedIn = false;
+        return false;
+      }
+
+      const homeIndicators = await this.page!.$$('[aria-label="Home"], [aria-label="الصفحة الرئيسية"]');
+      if (homeIndicators.length > 0) {
+        this.isLoggedIn = true;
+        console.log(`[FB] Login successful - home page detected`);
+        return true;
+      }
+
+      if (!currentUrl.includes("login") && !currentUrl.includes("checkpoint")) {
+        this.isLoggedIn = true;
+        console.log(`[FB] Login appears successful`);
+        return true;
+      }
+
+      console.log(`[FB] Login failed - still on login page`);
+      this.isLoggedIn = false;
+      return false;
     } catch (error) {
       console.error(`[FB] Login error:`, error);
       this.isLoggedIn = false;
@@ -102,44 +127,89 @@ export class FacebookAutomation {
       console.log(`[FB] Navigating to post: ${postUrl}`);
       
       await this.page.goto(postUrl, { 
-        waitUntil: "networkidle2",
-        timeout: 30000 
+        waitUntil: "domcontentloaded",
+        timeout: 60000 
       });
 
+      await this.delay(8000);
+
+      await this.page.evaluate(() => {
+        window.scrollBy(0, 500);
+      });
       await this.delay(3000);
+
+      console.log(`[FB] Inspecting page for like buttons...`);
+      
+      const allAriaElements = await this.page.$$('[aria-label]');
+      console.log(`[FB] Found ${allAriaElements.length} elements with aria-label`);
+      
+      for (const el of allAriaElements.slice(0, 30)) {
+        const label = await el.evaluate(e => e.getAttribute('aria-label'));
+        if (label && (label.toLowerCase().includes('like') || label.includes('أعجبني') || label.includes('إعجاب'))) {
+          console.log(`[FB] Found aria-label: "${label}"`);
+        }
+      }
 
       const likeButtonSelectors = [
         '[aria-label="Like"]',
         '[aria-label="أعجبني"]',
+        '[aria-label="إعجاب"]',
         'div[aria-label*="Like"]',
         'div[aria-label*="أعجبني"]',
-        'span[data-testid="UFI2ReactionsCount/root"]',
-        'div[data-testid="UFI2ReactionLink"]',
+        '[aria-label^="Like"]',
+        'div[role="article"] [aria-label*="Like"]',
+        '.UFILikeLink',
+        '.likeButton',
       ];
 
       let likeButton = null;
       for (const selector of likeButtonSelectors) {
-        likeButton = await this.page.$(selector);
-        if (likeButton) {
-          console.log(`[FB] Found like button with selector: ${selector}`);
-          break;
+        try {
+          likeButton = await this.page.$(selector);
+          if (likeButton) {
+            console.log(`[FB] Found like button with selector: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
         }
       }
 
       if (!likeButton) {
-        const allButtons = await this.page.$$('div[role="button"]');
-        for (const button of allButtons) {
-          const ariaLabel = await button.evaluate(el => el.getAttribute('aria-label'));
-          if (ariaLabel && (ariaLabel.includes('Like') || ariaLabel.includes('أعجبني'))) {
-            likeButton = button;
+        try {
+          const [xpathButton] = await this.page.$$("xpath/.//span[contains(text(), 'Like')]");
+          if (xpathButton) {
+            likeButton = xpathButton;
+            console.log(`[FB] Found like button via XPath`);
+          }
+        } catch (e) {
+          console.log(`[FB] XPath search failed`);
+        }
+      }
+
+      if (!likeButton) {
+        console.log(`[FB] Searching all clickable elements...`);
+        const allClickable = await this.page.$$('[role="button"], button, a');
+        console.log(`[FB] Found ${allClickable.length} clickable elements`);
+        
+        for (const el of allClickable) {
+          const textContent = await el.evaluate(e => e.textContent?.trim().toLowerCase() || '');
+          const ariaLabel = await el.evaluate(e => e.getAttribute('aria-label')?.toLowerCase() || '');
+          
+          if ((textContent === 'like' || textContent === 'أعجبني' || textContent === 'إعجاب') ||
+              (ariaLabel.includes('like') || ariaLabel.includes('أعجبني'))) {
+            likeButton = el;
+            console.log(`[FB] Found like button: text="${textContent}" aria="${ariaLabel}"`);
             break;
           }
         }
       }
 
       if (!likeButton) {
+        const url = this.page.url();
+        console.log(`[FB] Current URL: ${url}`);
         console.log(`[FB] Like button not found`);
-        return { success: false, error: "Like button not found" };
+        return { success: false, error: "Like button not found - Facebook UI may have changed" };
       }
 
       await likeButton.click();
