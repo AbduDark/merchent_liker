@@ -322,55 +322,119 @@ export class FacebookAutomation {
     try {
       console.log(`[FB] Adding comment to post: ${postUrl}`);
 
-      // Refresh the page to get clean state
+      // Navigate to post
       await this.page.goto(postUrl, { 
         waitUntil: "networkidle2",
         timeout: 60000 
       });
       await this.delay(5000);
 
-      // Scroll down to load comments section
+      // Scroll to load comments section
       await this.page.evaluate(() => {
         window.scrollBy(0, 600);
       });
       await this.delay(2000);
 
-      // Extended list of comment box selectors for different Facebook versions
+      // Extended selectors for comment triggers (to click first)
+      const commentTriggerSelectors = [
+        '[aria-label*="Comment"]',
+        '[aria-label*="comment"]',
+        '[aria-label*="تعليق"]',
+        '[aria-label="Write a comment"]',
+        '[aria-label="اكتب تعليقاً"]',
+        '[data-sigil*="comment"]',
+        'a[href*="comment"]',
+        'div[role="button"][tabindex="0"]',
+      ];
+
+      // Extended list of comment box selectors
       const commentBoxSelectors = [
         'div[aria-label="Write a comment"]',
         'div[aria-label="Write a comment..."]',
         'div[aria-label="اكتب تعليقاً"]',
         'div[aria-label="اكتب تعليقاً..."]',
         'div[aria-label="أضف تعليقًا"]',
-        'div[aria-label*="comment"]',
-        'div[aria-label*="تعليق"]',
+        'div[aria-label*="comment"][contenteditable="true"]',
+        'div[aria-label*="تعليق"][contenteditable="true"]',
         'div[contenteditable="true"][role="textbox"]',
         'textarea[name="comment_text"]',
         '[data-testid="UFI2CommentTextarea/root"]',
         'div[data-sigil="comment-input"]',
         'form[data-sigil="commenting-form"] textarea',
+        'textarea[placeholder*="comment"]',
+        'textarea[placeholder*="تعليق"]',
       ];
 
       let commentBox = null;
-      for (const selector of commentBoxSelectors) {
-        try {
-          commentBox = await this.page.$(selector);
-          if (commentBox) {
-            console.log(`[FB] Found comment box with selector: ${selector}`);
-            break;
+      
+      // Polling loop - try multiple times with delays
+      const maxAttempts = 5;
+      for (let attempt = 0; attempt < maxAttempts && !commentBox; attempt++) {
+        console.log(`[FB] Comment search attempt ${attempt + 1}/${maxAttempts}`);
+        
+        // First, try to find comment box directly
+        for (const selector of commentBoxSelectors) {
+          try {
+            commentBox = await this.page.$(selector);
+            if (commentBox) {
+              console.log(`[FB] Found comment box with selector: ${selector}`);
+              break;
+            }
+          } catch (e) {
+            continue;
           }
-        } catch (e) {
-          continue;
+        }
+        
+        if (commentBox) break;
+
+        // Try clicking comment triggers to open the composer
+        console.log(`[FB] Searching for comment triggers...`);
+        for (const triggerSelector of commentTriggerSelectors) {
+          try {
+            const triggers = await this.page.$$(triggerSelector);
+            for (const trigger of triggers) {
+              const ariaLabel = await trigger.evaluate(e => e.getAttribute('aria-label') || '');
+              const text = await trigger.evaluate(e => e.textContent || '');
+              
+              if (ariaLabel.toLowerCase().includes('comment') || 
+                  ariaLabel.includes('تعليق') ||
+                  text.toLowerCase().includes('comment') ||
+                  text.includes('تعليق')) {
+                console.log(`[FB] Clicking trigger: aria="${ariaLabel}" text="${text.substring(0,30)}"`);
+                await trigger.click();
+                await this.delay(2000);
+                
+                // Check for comment box after click
+                for (const selector of commentBoxSelectors) {
+                  commentBox = await this.page.$(selector);
+                  if (commentBox) {
+                    console.log(`[FB] Found comment box after clicking trigger: ${selector}`);
+                    break;
+                  }
+                }
+                if (commentBox) break;
+              }
+            }
+            if (commentBox) break;
+          } catch (e) {
+            continue;
+          }
+        }
+
+        if (!commentBox) {
+          // Scroll more and wait
+          await this.page.evaluate(() => window.scrollBy(0, 300));
+          await this.delay(2000);
         }
       }
 
-      // Try to find by looking for placeholder text
+      // Final fallback - search all contenteditable elements
       if (!commentBox) {
-        console.log(`[FB] Searching for comment input by text...`);
-        const allInputs = await this.page.$$('div[contenteditable="true"], textarea, input[type="text"]');
-        for (const input of allInputs) {
+        console.log(`[FB] Searching all editable elements...`);
+        const allEditables = await this.page.$$('[contenteditable="true"], textarea');
+        for (const el of allEditables) {
           try {
-            const placeholder = await input.evaluate(e => 
+            const placeholder = await el.evaluate(e => 
               e.getAttribute('placeholder') || 
               e.getAttribute('aria-label') || 
               e.getAttribute('aria-placeholder') || 
@@ -379,32 +443,9 @@ export class FacebookAutomation {
             if (placeholder.toLowerCase().includes('comment') || 
                 placeholder.includes('تعليق') ||
                 placeholder.includes('اكتب')) {
-              commentBox = input;
-              console.log(`[FB] Found comment input with placeholder: ${placeholder}`);
+              commentBox = el;
+              console.log(`[FB] Found editable with placeholder: ${placeholder}`);
               break;
-            }
-          } catch (e) {
-            continue;
-          }
-        }
-      }
-
-      // Try clicking on "Write a comment" section first
-      if (!commentBox) {
-        console.log(`[FB] Trying to click on comment section...`);
-        const commentSections = await this.page.$$('[role="button"]');
-        for (const section of commentSections) {
-          try {
-            const text = await section.evaluate(e => e.textContent || '');
-            if (text.includes('Write a comment') || text.includes('تعليق') || text.includes('اكتب')) {
-              await section.click();
-              await this.delay(1000);
-              // Now try to find the input again
-              commentBox = await this.page.$('div[contenteditable="true"][role="textbox"]');
-              if (commentBox) {
-                console.log(`[FB] Found comment box after clicking section`);
-                break;
-              }
             }
           } catch (e) {
             continue;
@@ -414,24 +455,58 @@ export class FacebookAutomation {
 
       if (!commentBox) {
         console.log(`[FB] Comment box not found after all attempts`);
-        // Log current page elements for debugging
+        // Debug: log available elements
         const allAriaElements = await this.page.$$('[aria-label]');
-        console.log(`[FB] Found ${allAriaElements.length} aria-label elements`);
-        for (const el of allAriaElements.slice(0, 10)) {
+        console.log(`[FB] Found ${allAriaElements.length} aria-label elements. Samples:`);
+        for (const el of allAriaElements.slice(0, 15)) {
           const label = await el.evaluate(e => e.getAttribute('aria-label'));
-          console.log(`[FB] aria-label: "${label}"`);
+          if (label && label.length < 100) {
+            console.log(`[FB] aria-label: "${label}"`);
+          }
         }
         return { success: false, error: "Comment box not found" };
       }
 
+      // Click and focus the comment box
       await commentBox.click();
-      await this.delay(500);
+      await this.delay(800);
 
-      await this.page.keyboard.type(commentText, { delay: 80 });
-      await this.delay(1500);
+      // Type the comment
+      await this.page.keyboard.type(commentText, { delay: 100 });
+      await this.delay(2000);
 
-      // Try multiple ways to submit
-      await this.page.keyboard.press("Enter");
+      // Try to find and click submit button
+      const submitSelectors = [
+        '[aria-label="Submit"]',
+        '[aria-label="Post"]',
+        '[aria-label="نشر"]',
+        '[aria-label="إرسال"]',
+        'button[type="submit"]',
+        '[data-sigil*="submit"]',
+        'div[aria-label="Comment"][role="button"]',
+      ];
+      
+      let submitted = false;
+      for (const selector of submitSelectors) {
+        try {
+          const submitBtn = await this.page.$(selector);
+          if (submitBtn) {
+            await submitBtn.click();
+            submitted = true;
+            console.log(`[FB] Clicked submit with: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!submitted) {
+        // Fallback to Enter key
+        await this.page.keyboard.press("Enter");
+        console.log(`[FB] Pressed Enter to submit`);
+      }
+      
       await this.delay(3000);
 
       console.log(`[FB] Successfully added comment`);
