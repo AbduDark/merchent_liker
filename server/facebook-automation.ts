@@ -50,7 +50,7 @@ export class FacebookAutomation {
     }
 
     try {
-      console.log(`[FB] Logging in with account: ${credentials.username}`);
+      console.log(`[FB] Logging in with account: ${credentials.username.substring(0, 3)}***`);
       
       await this.page!.goto("https://www.facebook.com/", { 
         waitUntil: "networkidle2",
@@ -84,7 +84,7 @@ export class FacebookAutomation {
       }
 
       this.isLoggedIn = true;
-      console.log(`[FB] Login successful for: ${credentials.username}`);
+      console.log(`[FB] Login successful`);
       return true;
     } catch (error) {
       console.error(`[FB] Login error:`, error);

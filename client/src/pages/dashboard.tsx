@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,8 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth-context";
 import { Link } from "wouter";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { 
   TrendingUp, 
   Users, 
@@ -16,9 +18,22 @@ import {
   ArrowUpLeft,
   Clock,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Play,
+  Square,
+  Loader2,
+  Zap
 } from "lucide-react";
 import type { Campaign, SocialAccount } from "@shared/schema";
+
+interface WorkerStatus {
+  isRunning: boolean;
+  currentCampaignId: string | null;
+  currentAccountId: string | null;
+  lastError: string | null;
+  processedLikes: number;
+  processedComments: number;
+}
 
 function StatCard({ 
   title, 
@@ -164,13 +179,48 @@ function DashboardSkeleton() {
 
 export default function Dashboard() {
   const { merchant } = useAuth();
+  const { toast } = useToast();
+
+  const { data: workerStatus, isLoading: workerLoading } = useQuery<WorkerStatus>({
+    queryKey: ["/api/worker/status"],
+    refetchInterval: 3000,
+  });
 
   const { data: campaigns = [], isLoading: campaignsLoading } = useQuery<Campaign[]>({
     queryKey: ["/api/campaigns"],
+    refetchInterval: workerStatus?.isRunning ? 5000 : false,
   });
 
   const { data: accounts = [], isLoading: accountsLoading } = useQuery<SocialAccount[]>({
     queryKey: ["/api/accounts"],
+  });
+
+  const startWorkerMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/worker/start");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/worker/status"] });
+      toast({ title: "تم بدء المعالجة", description: "يتم الآن معالجة الحملات النشطة" });
+    },
+    onError: () => {
+      toast({ title: "خطأ", description: "حدث خطأ أثناء بدء المعالجة", variant: "destructive" });
+    },
+  });
+
+  const stopWorkerMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/worker/stop");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/worker/status"] });
+      toast({ title: "تم إيقاف المعالجة", description: "تم إيقاف معالجة الحملات" });
+    },
+    onError: () => {
+      toast({ title: "خطأ", description: "حدث خطأ أثناء إيقاف المعالجة", variant: "destructive" });
+    },
   });
 
   const isLoading = campaignsLoading || accountsLoading;
@@ -263,6 +313,86 @@ export default function Dashboard() {
           ))}
         </div>
       )}
+
+      <Card className="mt-8">
+        <CardHeader>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${workerStatus?.isRunning ? "bg-green-500/10" : "bg-muted"}`}>
+                <Zap className={`w-5 h-5 ${workerStatus?.isRunning ? "text-green-500" : "text-muted-foreground"}`} />
+              </div>
+              <div>
+                <CardTitle className="text-lg">محرك الأتمتة</CardTitle>
+                <CardDescription>
+                  {workerStatus?.isRunning ? "يعمل الآن على معالجة الحملات" : "متوقف - اضغط لبدء المعالجة"}
+                </CardDescription>
+              </div>
+            </div>
+            <Badge variant={workerStatus?.isRunning ? "default" : "secondary"} data-testid="badge-worker-status">
+              {workerStatus?.isRunning ? "يعمل" : "متوقف"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-4 flex-wrap mb-4">
+            <div className="flex gap-6 flex-wrap">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-primary" data-testid="text-processed-likes">
+                  {workerStatus?.processedLikes || 0}
+                </p>
+                <p className="text-xs text-muted-foreground">لايكات منفذة</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-primary" data-testid="text-processed-comments">
+                  {workerStatus?.processedComments || 0}
+                </p>
+                <p className="text-xs text-muted-foreground">تعليقات منفذة</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              {workerStatus?.isRunning ? (
+                <Button 
+                  variant="destructive" 
+                  onClick={() => stopWorkerMutation.mutate()}
+                  disabled={stopWorkerMutation.isPending}
+                  data-testid="button-stop-worker"
+                >
+                  {stopWorkerMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 ml-2 animate-spin" />
+                  ) : (
+                    <Square className="w-4 h-4 ml-2" />
+                  )}
+                  إيقاف
+                </Button>
+              ) : (
+                <Button 
+                  onClick={() => startWorkerMutation.mutate()}
+                  disabled={startWorkerMutation.isPending || activeCampaigns.length === 0}
+                  data-testid="button-start-worker"
+                >
+                  {startWorkerMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 ml-2 animate-spin" />
+                  ) : (
+                    <Play className="w-4 h-4 ml-2" />
+                  )}
+                  بدء المعالجة
+                </Button>
+              )}
+            </div>
+          </div>
+          {workerStatus?.lastError && (
+            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+              <AlertCircle className="w-4 h-4 inline ml-2" />
+              {workerStatus.lastError}
+            </div>
+          )}
+          {activeCampaigns.length === 0 && !workerStatus?.isRunning && (
+            <div className="p-3 rounded-lg bg-muted text-muted-foreground text-sm">
+              لا توجد حملات نشطة للمعالجة. قم بتفعيل حملة أولاً.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="mt-8 grid gap-4 md:grid-cols-2">
         <Card>

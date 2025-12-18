@@ -43,7 +43,11 @@ class CampaignWorker {
     this.lastError = null;
     console.log("[Worker] Starting campaign worker...");
 
-    await this.processLoop();
+    this.processLoop().catch((error) => {
+      console.error("[Worker] Process loop error:", error);
+      this.lastError = String(error);
+      this.isRunning = false;
+    });
   }
 
   async stop(): Promise<void> {
@@ -147,7 +151,7 @@ class CampaignWorker {
     doComment: boolean
   ): Promise<void> {
     this.currentAccountId = account.id;
-    console.log(`[Worker] Using account: ${account.username}`);
+    console.log(`[Worker] Using account: ${account.username.substring(0, 3)}***`);
 
     let automation = this.automationInstances.get(account.id);
     
@@ -157,14 +161,24 @@ class CampaignWorker {
       try {
         await automation.initialize();
         
-        const password = decrypt(account.encryptedPassword);
+        let password: string | null = null;
+        try {
+          password = decrypt(account.encryptedPassword);
+        } catch (e) {
+          console.error("[Worker] Failed to decrypt password");
+          this.currentAccountId = null;
+          return;
+        }
+        
         const loginSuccess = await automation.login({
           username: account.username,
           password: password,
         });
+        
+        password = null;
 
         if (!loginSuccess) {
-          console.log(`[Worker] Login failed for account: ${account.username}`);
+          console.log(`[Worker] Login failed for account`);
           await storage.updateAccountStatus(account.id, "error");
           await automation.close();
           this.currentAccountId = null;
@@ -174,7 +188,7 @@ class CampaignWorker {
         this.automationInstances.set(account.id, automation);
         await storage.updateAccountStatus(account.id, "active");
       } catch (error) {
-        console.error(`[Worker] Error initializing account ${account.username}:`, error);
+        console.error(`[Worker] Error initializing account:`, error);
         await storage.updateAccountStatus(account.id, "error");
         await automation.close();
         this.currentAccountId = null;
@@ -211,7 +225,7 @@ class CampaignWorker {
 
       await this.delay(5000 + Math.random() * 5000);
     } catch (error) {
-      console.error(`[Worker] Error processing with account ${account.username}:`, error);
+      console.error(`[Worker] Error processing with account:`, error);
       this.lastError = String(error);
     }
 
